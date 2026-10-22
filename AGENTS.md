@@ -16,4 +16,4 @@ Asteroids clone in pure HTML5 Canvas: no framework, no bundler, no dependencies,
 - Entity pattern: classes with `update(dt)` + `draw()` and a `dead` flag; arrays are re-filtered each frame after the update loop. All positions wrap at edges via `wrap()` (toroidal world). Loop is delta-time based, `dt` clamped to 0.05s.
 - Input: `keys` holds current key state; `pressed(code)` is edge-triggered and consumes the flag (read-once). Arrows/Space get `preventDefault` in the window keydown listener.
 - `update()` owns collisions (circle-distance checks) and the state machine (`'playing' | 'dead' | 'gameover'`); a cleared field triggers `nextLevel()`.
-- Stale README claim: it advertises power-ups and a `estrella fugaz` (shooting-star) asteroid — neither exists in `game.js`. Trust the code over the README feature list.
+- Power-ups and the `estrella fugaz` (shooting-star) asteroid both exist in `game.js`; the README documents them accurately.
