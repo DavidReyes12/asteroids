@@ -1,0 +1,11 @@
+# Worktree directories
+**/worktree/
+
+# Node modules
+node_modules/
+
+# Package lock files
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+bun.lockb
