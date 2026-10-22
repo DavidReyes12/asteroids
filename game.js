@@ -204,6 +204,8 @@ class Ship {
     this.invincible    = 3;
     this.shootCooldown = 0;
     this.speedBoost    = 0;
+    this.shieldTime    = 0;   // > 0 → escudo activo (segundos restantes)
+    this.shieldHits    = 0;   // impactos que puede absorber el escudo
     this.dead          = false;
   }
 
@@ -212,6 +214,7 @@ class Ship {
     if (this.invincible    > 0) this.invincible    -= dt;
     if (this.shootCooldown > 0) this.shootCooldown -= dt;
     if (this.speedBoost    > 0) this.speedBoost    -= dt;
+    if (this.shieldTime    > 0) this.shieldTime    -= dt;
 
     const ROT   = 3.5;   // rad/s
     const THRUST = 260;  // px/s²
@@ -277,6 +280,19 @@ class Ship {
     }
 
     ctx.restore();
+
+    // Escudo: barrera circular cian con pulso leve
+    if (this.shieldTime > 0) {
+      // Parpadeo cuando solo le queda 1 golpe por absorber
+      const parpadea = this.shieldHits <= 1 && Math.floor(this.shieldTime * 8) % 2 === 0;
+      if (!parpadea) {
+        ctx.strokeStyle = 'rgba(0, 200, 255, 0.7)';
+        ctx.lineWidth   = 2;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, 22 + Math.sin(this.shieldTime * 9) * 1.5, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
   }
 }
 
@@ -312,15 +328,18 @@ class Particle {
   }
 }
 
-// ── PowerUp (Velocidad) ───────────────────────────────────────────────────────
+// ── PowerUp (Velocidad y Escudo) ──────────────────────────────────────────────
 const DROP_CHANCE = 0.15;  // probabilidad de drop al destruir un asteroide
 const BOOST_TIME  = 5;     // duración del boost en segundos
 const BOOST_MULT  = 2;     // multiplicador de empuje
+const SHIELD_TIME = 8;     // duración del escudo en segundos
+const SHIELD_HITS = 3;     // impactos que absorbe el escudo
 
 class PowerUp {
-  constructor(x, y) {
+  constructor(x, y, type = 'velocidad') {
     this.x = x;
     this.y = y;
+    this.type = type;      // 'velocidad' | 'escudo'
     const angle = rand(0, Math.PI * 2);
     const speed = rand(20, 40);
     this.vx     = Math.cos(angle) * speed;
@@ -341,26 +360,40 @@ class PowerUp {
     // Parpadeo al final de su vida
     if (this.ttl < 2 && Math.floor(this.ttl * 6) % 2 === 0) return;
 
+    const escudo  = this.type === 'escudo';
+    const color   = escudo ? '#00c8ff' : '#ff8200';
+    const relleno = escudo ? 'rgba(0, 200, 255, 0.15)' : 'rgba(255, 130, 0, 0.15)';
+    const letra   = escudo ? 'E' : 'V';
+
     const r = this.radius;
-    ctx.strokeStyle = '#ff8200';
-    ctx.fillStyle   = 'rgba(255, 130, 0, 0.15)';
+    ctx.strokeStyle = color;
+    ctx.fillStyle   = relleno;
     ctx.lineWidth   = 1.5;
     ctx.lineJoin    = 'round';
 
-    ctx.beginPath();
-    ctx.moveTo( 0, -r);
-    ctx.lineTo( r,  0);
-    ctx.lineTo( 0,  r);
-    ctx.lineTo(-r,  0);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
+    if (escudo) {
+      // Círculo (barrera)
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, r - 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    } else {
+      // Rombo
+      ctx.beginPath();
+      ctx.moveTo( 0, -r);
+      ctx.lineTo( r,  0);
+      ctx.lineTo( 0,  r);
+      ctx.lineTo(-r,  0);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
 
-    ctx.fillStyle   = '#ff8200';
-    ctx.font        = 'bold 13px monospace';
-    ctx.textAlign   = 'center';
+    ctx.fillStyle    = color;
+    ctx.font         = 'bold 13px monospace';
+    ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('V', this.x, this.y + 1);
+    ctx.fillText(letra, this.x, this.y + 1);
     ctx.textBaseline = 'alphabetic';
   }
 }
@@ -478,9 +511,9 @@ function update(dt) {
         score += a.points;
         explode(a.x, a.y, a.size * 5);
         newAsteroids.push(...a.split());
-        // Drop del power-up "Velocidad"
+        // Drop de power-up: Velocidad o Escudo (50/50)
         if (Math.random() < DROP_CHANCE)
-          powerups.push(new PowerUp(a.x, a.y));
+          powerups.push(new PowerUp(a.x, a.y, Math.random() < 0.5 ? 'velocidad' : 'escudo'));
       }
     }
   }
@@ -489,19 +522,44 @@ function update(dt) {
 
   // Nave vs asteroide
   if (ship.invincible <= 0) {
+    const fragments = [];
+    // Con escudo activo el radio efectivo crece hasta casi tocar el anillo
+    const radioNave = ship.radius + (ship.shieldTime > 0 && ship.shieldHits > 0 ? 8 : 0);
     for (const a of asteroids) {
-      if (dist(ship, a) < ship.radius + a.radius * 0.82) {
-        killShip();
-        break;
+      if (dist(ship, a) < radioNave + a.radius * 0.82) {
+        if (ship.shieldTime > 0 && ship.shieldHits > 0) {
+          // El escudo absorbe el impacto: el asteroide se destruye con normalidad
+          a.dead = true;
+          score += a.points;
+          explode(a.x, a.y, a.size * 5);
+          fragments.push(...a.split());
+          if (Math.random() < DROP_CHANCE)
+            powerups.push(new PowerUp(a.x, a.y, Math.random() < 0.5 ? 'velocidad' : 'escudo'));
+          ship.shieldHits--;
+          if (ship.shieldHits <= 0) {
+            // Escudo roto: se desvanece de golpe
+            ship.shieldTime = 0;
+            explode(ship.x, ship.y, 8);
+          }
+        } else {
+          killShip();
+          break;
+        }
       }
     }
+    asteroids = asteroids.filter(a => !a.dead).concat(fragments);
   }
 
   // Nave vs power-up
   for (const pu of powerups) {
     if (dist(ship, pu) < ship.radius + pu.radius) {
       pu.dead = true;
-      ship.speedBoost = BOOST_TIME;
+      if (pu.type === 'escudo') {
+        ship.shieldTime = SHIELD_TIME;
+        ship.shieldHits = SHIELD_HITS;
+      } else {
+        ship.speedBoost = BOOST_TIME;
+      }
       explode(pu.x, pu.y, 6);
     }
   }
@@ -546,6 +604,13 @@ function drawHUD() {
     ctx.fillStyle = 'rgba(0, 200, 255, 0.9)';
     ctx.textAlign = 'left';
     ctx.fillText(`VELOCIDAD ${ship.speedBoost.toFixed(1)}s`, 14, H - 16);
+  }
+
+  if (ship.shieldTime > 0) {
+    ctx.fillStyle = 'rgba(0, 200, 255, 0.9)';
+    ctx.textAlign = 'left';
+    const golpes = '█'.repeat(ship.shieldHits);
+    ctx.fillText(`ESCUDO ${ship.shieldTime.toFixed(1)}s ${golpes}`, 14, H - 33);
   }
 }
 
