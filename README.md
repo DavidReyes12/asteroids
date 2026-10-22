@@ -4,7 +4,7 @@ Clon del clásico arcade **Asteroids** implementado en canvas HTML5 puro, sin de
 
 ## Descripción
 
-Nave espacial en un campo de asteroides con envolvimiento de bordes (el espacio es toroidal). Destruye asteroides para sumar puntos: los grandes se parten en medianos, los medianos en pequeños. Los asteroides pueden dejar caer el power-up **Velocidad**.
+Nave espacial en un campo de asteroides con envolvimiento de bordes (el espacio es toroidal). Destruye asteroides para sumar puntos: los grandes se parten en medianos, los medianos en pequeños. Los asteroides pueden dejar caer power-ups: **Velocidad** o **Triple disparo**.
 
 ## Tecnologías
 
@@ -51,3 +51,4 @@ Luego visita `http://localhost:3000`.
 | Power-up | Aparición | Efecto |
 | -------- | --------- | ------ |
 | **Velocidad** (rombo naranja con "V") | 15% de probabilidad al destruir un asteroide | Duplica el empuje de la nave durante 5 segundos. La llama del propulsor se vuelve cian y un temporizador aparece en el HUD. La cápsula se desvanece a los 10 segundos si no se recoge. |
+| **Triple disparo** (rombo magenta con "T") | Mismo drop de 15%; si cae, el tipo se elige al azar (50/50) | Durante 5 segundos cada disparo es un abanico de 3 balas: una recta al frente y dos con ±8° de apertura. Un temporizador magenta aparece en el HUD. Al expirar, morir o cambiar de nivel, se pierde. La cápsula se desvanece a los 10 segundos si no se recoge. |

@@ -204,6 +204,7 @@ class Ship {
     this.invincible    = 3;
     this.shootCooldown = 0;
     this.speedBoost    = 0;
+    this.tripleShot    = 0;
     this.dead          = false;
   }
 
@@ -212,6 +213,7 @@ class Ship {
     if (this.invincible    > 0) this.invincible    -= dt;
     if (this.shootCooldown > 0) this.shootCooldown -= dt;
     if (this.speedBoost    > 0) this.speedBoost    -= dt;
+    if (this.tripleShot    > 0) this.tripleShot    -= dt;
 
     const ROT   = 3.5;   // rad/s
     const THRUST = 260;  // px/s²
@@ -240,6 +242,14 @@ class Ship {
     const NOSE = 21;
     const ox = this.x + Math.cos(this.angle) * NOSE;
     const oy = this.y + Math.sin(this.angle) * NOSE;
+    // Power-up "Triple disparo": abanico de 3 balas (centro recto, ±TRIPLE_SPREAD)
+    if (this.tripleShot > 0) {
+      return [
+        new Bullet(ox, oy, this.angle - TRIPLE_SPREAD),
+        new Bullet(ox, oy, this.angle),
+        new Bullet(ox, oy, this.angle + TRIPLE_SPREAD),
+      ];
+    }
     return [new Bullet(ox, oy, this.angle)];
   }
 
@@ -312,15 +322,26 @@ class Particle {
   }
 }
 
-// ── PowerUp (Velocidad) ───────────────────────────────────────────────────────
+// ── PowerUp (Velocidad / Triple disparo) ─────────────────────────────────────
 const DROP_CHANCE = 0.15;  // probabilidad de drop al destruir un asteroide
 const BOOST_TIME  = 5;     // duración del boost en segundos
 const BOOST_MULT  = 2;     // multiplicador de empuje
 
+// Power-up "Triple disparo"
+const TRIPLE_TIME   = 5;    // duración del efecto en segundos
+const TRIPLE_SPREAD = 0.14; // apertura del abanico, rad a cada lado (~8°)
+const TRIPLE_COLOR  = '#ff4fd8';
+
+const POWER_STYLES = {
+  velocidad: { color: '#ff8200', fondo: 'rgba(255, 130, 0, 0.15)', letra: 'V' },
+  triple:    { color: TRIPLE_COLOR, fondo: 'rgba(255, 79, 216, 0.15)', letra: 'T' },
+};
+
 class PowerUp {
-  constructor(x, y) {
+  constructor(x, y, type = 'velocidad') {
     this.x = x;
     this.y = y;
+    this.type = type;
     const angle = rand(0, Math.PI * 2);
     const speed = rand(20, 40);
     this.vx     = Math.cos(angle) * speed;
@@ -341,9 +362,10 @@ class PowerUp {
     // Parpadeo al final de su vida
     if (this.ttl < 2 && Math.floor(this.ttl * 6) % 2 === 0) return;
 
-    const r = this.radius;
-    ctx.strokeStyle = '#ff8200';
-    ctx.fillStyle   = 'rgba(255, 130, 0, 0.15)';
+    const r       = this.radius;
+    const estilos = POWER_STYLES[this.type];
+    ctx.strokeStyle = estilos.color;
+    ctx.fillStyle   = estilos.fondo;
     ctx.lineWidth   = 1.5;
     ctx.lineJoin    = 'round';
 
@@ -356,11 +378,11 @@ class PowerUp {
     ctx.fill();
     ctx.stroke();
 
-    ctx.fillStyle   = '#ff8200';
+    ctx.fillStyle   = estilos.color;
     ctx.font        = 'bold 13px monospace';
     ctx.textAlign   = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('V', this.x, this.y + 1);
+    ctx.fillText(estilos.letra, this.x, this.y + 1);
     ctx.textBaseline = 'alphabetic';
   }
 }
@@ -478,9 +500,11 @@ function update(dt) {
         score += a.points;
         explode(a.x, a.y, a.size * 5);
         newAsteroids.push(...a.split());
-        // Drop del power-up "Velocidad"
-        if (Math.random() < DROP_CHANCE)
-          powerups.push(new PowerUp(a.x, a.y));
+        // Drop de power-up: Velocidad o Triple disparo, al azar
+        if (Math.random() < DROP_CHANCE) {
+          const tipo = Math.random() < 0.5 ? 'velocidad' : 'triple';
+          powerups.push(new PowerUp(a.x, a.y, tipo));
+        }
       }
     }
   }
@@ -501,7 +525,8 @@ function update(dt) {
   for (const pu of powerups) {
     if (dist(ship, pu) < ship.radius + pu.radius) {
       pu.dead = true;
-      ship.speedBoost = BOOST_TIME;
+      if (pu.type === 'triple') ship.tripleShot = TRIPLE_TIME;
+      else                      ship.speedBoost = BOOST_TIME;
       explode(pu.x, pu.y, 6);
     }
   }
@@ -546,6 +571,12 @@ function drawHUD() {
     ctx.fillStyle = 'rgba(0, 200, 255, 0.9)';
     ctx.textAlign = 'left';
     ctx.fillText(`VELOCIDAD ${ship.speedBoost.toFixed(1)}s`, 14, H - 16);
+  }
+
+  if (ship.tripleShot > 0) {
+    ctx.fillStyle = TRIPLE_COLOR;
+    ctx.textAlign = 'left';
+    ctx.fillText(`TRIPLE DISPARO ${ship.tripleShot.toFixed(1)}s`, 14, H - 34);
   }
 }
 
