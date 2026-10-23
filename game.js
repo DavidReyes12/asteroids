@@ -190,32 +190,49 @@ class EstrellaFugaz extends Asteroid {
 }
 
 // ── Skins de la nave ──────────────────────────────────────────────────────────
-// Cada skin define nombre, color de trazo, color del propulsor y silueta
-// (polígono de vértices). La primera es la silueta clásica del Asteroids.
+// Cada skin define nombre, color de trazo, color del propulsor, silueta
+// (polígono de vértices), escala de tamaño (1 = normal) y multiplicador de
+// puntos. La primera es la silueta clásica del Asteroids.
 const SKINS = [
   {
     nombre: 'CLÁSICA',
     color: '#fff',
     llama: 'rgba(255, 130, 0, 0.85)',
     verts: [[ 20,  0], [-12, -9], [ -7,  0], [-12,  9]],   // triángulo con muesca
+    escala: 1,
+    mult:   1,
   },
   {
     nombre: 'BÓLIDO',
     color: '#ff5566',
     llama: 'rgba(255, 90, 100, 0.85)',
     verts: [[ 22,  0], [-10, -6], [-16,  0], [-10,  6]],   // flecha alargada
+    escala: 1,
+    mult:   1,
   },
   {
     nombre: 'TÓXICA',
     color: '#66ff66',
     llama: 'rgba(90, 255, 90, 0.85)',
     verts: [[ 20,  0], [  2, -9], [-14, -11], [ -8,  0], [-14, 11], [  2,  9]], // delta con muesca doble
+    escala: 1,
+    mult:   1,
   },
   {
     nombre: 'FOTÓN',
     color: '#66ccff',
     llama: 'rgba(120, 220, 255, 0.85)',
     verts: [[ 20,  0], [ -4, -10], [-14, -4], [-14,  4], [ -4, 10]], // ovni puntiagudo
+    escala: 1,
+    mult:   1,
+  },
+  {
+    nombre: 'GRANDE',
+    color: '#c46bff',
+    llama: 'rgba(196, 107, 255, 0.85)',
+    verts: [[ 20,  0], [-12, -9], [ -7,  0], [-12,  9]],   // silueta clásica, al doble
+    escala: 2,   // el doble de grande que la nave original
+    mult:   2,   // recompensa: el doble de puntos por asteroide
   },
 ];
 
@@ -246,7 +263,7 @@ class Ship {
     this.angle  = -Math.PI / 2;
     this.vx     = 0;
     this.vy     = 0;
-    this.radius = 12;
+    this.radius = 12 * SKINS[skinIndex].escala;
     this.thrusting     = false;
     this.invincible    = 3;
     this.shootCooldown = 0;
@@ -259,6 +276,8 @@ class Ship {
 
   update(dt) {
     if (this.dead) return;
+    // El tamaño sigue a la skin activa (puede cambiar a mitad de partida)
+    this.radius = 12 * SKINS[skinIndex].escala;
     if (this.invincible    > 0) this.invincible    -= dt;
     if (this.shootCooldown > 0) this.shootCooldown -= dt;
     if (this.speedBoost    > 0) this.speedBoost    -= dt;
@@ -289,7 +308,8 @@ class Ship {
   tryShoot() {
     if (this.shootCooldown > 0 || this.dead) return [];
     this.shootCooldown = 0.2;
-    const NOSE = 21;
+    // El morro se aleja según la escala de la skin (nave grande = escopeta lejana)
+    const NOSE = 21 * SKINS[skinIndex].escala;
     const ox = this.x + Math.cos(this.angle) * NOSE;
     const oy = this.y + Math.sin(this.angle) * NOSE;
     // Power-up "Triple disparo": abanico de 3 balas (centro recto, ±TRIPLE_SPREAD)
@@ -312,6 +332,8 @@ class Ship {
     ctx.translate(this.x, this.y);
     ctx.rotate(this.angle);
     const skin = SKINS[skinIndex];
+    // Nave GRANDE: el doble de tamaño
+    ctx.scale(skin.escala, skin.escala);
     ctx.strokeStyle = skin.color;
     ctx.lineWidth   = 1.5;
     ctx.lineJoin    = 'round';
@@ -345,8 +367,9 @@ class Ship {
       if (!parpadea) {
         ctx.strokeStyle = 'rgba(0, 200, 255, 0.7)';
         ctx.lineWidth   = 2;
+        const escala = SKINS[skinIndex].escala;
         ctx.beginPath();
-        ctx.arc(this.x, this.y, 22 + Math.sin(this.shieldTime * 9) * 1.5, 0, Math.PI * 2);
+        ctx.arc(this.x, this.y, 22 * escala + Math.sin(this.shieldTime * 9) * 1.5, 0, Math.PI * 2);
         ctx.stroke();
       }
     }
@@ -588,7 +611,8 @@ function update(dt) {
       if (!a.dead && !b.dead && dist(b, a) < a.radius) {
         b.dead = true;
         a.dead = true;
-        score += a.points;
+        // La skin GRANDE multiplica los puntos x2
+        score += a.points * SKINS[skinIndex].mult;
         explode(a.x, a.y, a.size * 5);
         newAsteroids.push(...a.split());
         // Drop de power-up: Velocidad, Triple disparo o Escudo, al azar (1/3 cada uno)
@@ -609,7 +633,8 @@ function update(dt) {
         if (ship.shieldTime > 0 && ship.shieldHits > 0) {
           // El escudo absorbe el impacto: el asteroide se destruye con normalidad
           a.dead = true;
-          score += a.points;
+          // La skin GRANDE multiplica los puntos x2
+          score += a.points * SKINS[skinIndex].mult;
           explode(a.x, a.y, a.size * 5);
           fragments.push(...a.split());
           if (Math.random() < DROP_CHANCE) dropPowerUp(a.x, a.y);
