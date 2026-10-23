@@ -1,0 +1,259 @@
+# Triage automático de issues.
+#
+# Al crearse un issue, este workflow:
+#   1. Aplica un label según palabras clave del título y del cuerpo
+#      (bug, accessibility, documentation, enhancement o question; si nada
+#      coincide aplica el label genérico "triage", que se crea la primera
+#      vez que se necesita).
+#   2. Genera con OpenCode (agente "plan", de solo lectura) un resumen con
+#      severidad estimada, área del código y pasos sugeridos.
+#   3. Reescribe el cuerpo del issue: el texto original de quien reportó
+#      queda intacto arriba y debajo se añade una sección de triage con
+#      metadatos y el resumen. Un marcador oculto hace que la sección sea
+#      reemplazable (si el run se re-ejecuta no se duplica) sin tocar el
+#      texto original.
+#
+# Autenticación sin GITHUB_TOKEN ni secrets de GitHub: todas las llamadas
+# a la API (checkout, labels, edición del cuerpo) usan el token de la
+# GitHub App de OpenCode, canjeado vía OIDC contra el endpoint público
+# de OpenCode, con la misma audience y URL que usa la action oficial
+# cuando corre los comentarios /oc. El único secret requerido es
+# OPENCODE_API_KEY (clave del modelo, no un token de GitHub).
+#
+# El contenido del issue nunca se interpola en el shell: todo se lee del
+# payload del evento ($GITHUB_EVENT_PATH) con jq.
+name: Triage de issues
+
+on:
+  issues:
+    types: [opened]
+
+# Solo se necesita emitir el token OIDC con el que se canjea el token de
+# la App; los permisos de issues vienen de la App instalada en el repo.
+permissions:
+  id-token: write
+
+# Evita que dos runs del mismo issue (p. ej. original + re-ejecución)
+# se pisen entre sí.
+concurrency:
+  group: triage-issue-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      ISSUE_REPO: ${{ github.repository }}
+      ISSUE_SHA: ${{ github.sha }}
+    steps:
+      # Intercambia el token OIDC del run por un token de la GitHub App de
+      # OpenCode (el mismo flujo de la action oficial para /oc).
+      - name: Obtener el token de la App de OpenCode
+        id: app-token
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" || -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]]; then
+            echo "::error::Este job no cumplió con 'permissions: id-token: write'; no hay token OIDC disponible."
+            exit 1
+          fi
+
+          OIDC=$(curl -sf \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=opencode-github-action" | jq -r '.value')
+          if [[ -z "$OIDC" || "$OIDC" == "null" ]]; then
+            echo "::error::No se pudo obtener el token OIDC del run."
+            exit 1
+          fi
+
+          APP_TOKEN=$(curl -sf -X POST \
+            -H "Authorization: Bearer $OIDC" \
+            https://api.opencode.ai/exchange_github_app_token | jq -r '.token')
+          if [[ -z "$APP_TOKEN" || "$APP_TOKEN" == "null" ]]; then
+            echo "::error::No se pudo canjear el token de la App de OpenCode. Verifica que la GitHub App 'opencode-agent' esté instalada en este repo."
+            exit 1
+          fi
+
+          echo "token=$APP_TOKEN" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout del repositorio
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          token: ${{ steps.app-token.outputs.token }}
+
+      # Labels por palabras clave (ES/EN), primera coincidencia según este
+      # orden de prioridad: bug > accessibility > documentation >
+      # enhancement > question. Sin coincidencia -> "triage".
+      - name: Aplicar labels por palabras clave
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+
+          TITLE=$(jq -r '.issue.title' "$GITHUB_EVENT_PATH")
+          BODY=$(jq -r '.issue.body // ""' "$GITHUB_EVENT_PATH")
+          # Minúsculas con soporte Unicode (acentos y ñ).
+          TEXT=$(printf '%s\n%s' "$TITLE" "$BODY" | python3 -c 'import sys; sys.stdout.write(sys.stdin.read().lower())')
+
+          tiene_palabra() {
+            # $1 = texto, el resto = palabras clave a buscar.
+            local texto="$1"; shift
+            local palabra
+            for palabra in "$@"; do
+              [[ "$texto" == *"$palabra"* ]] && return 0
+            done
+            return 1
+          }
+
+          if tiene_palabra "$TEXT" bug error falla fallo falló fallando "no funciona" roto rompe crash crashea congela cuelga traba glitch; then
+            LABEL=bug
+          elif tiene_palabra "$TEXT" accesibilidad accessibility contraste daltonismo discapacidad sordo subtítulos subtitulos; then
+            LABEL=accessibility
+          elif tiene_palabra "$TEXT" readme documentación documentacion documentation docs wiki; then
+            LABEL=documentation
+          elif tiene_palabra "$TEXT" mejora mejorar agregar agrega añadir añade anadir anade feature "sería bueno" "seria bueno" sugiero sugerencia propuesta "nueva función" "nueva funcion" idea quisiera "me gustaría" "me gustaria"; then
+            LABEL=enhancement
+          elif tiene_palabra "$TEXT" pregunta duda "cómo" "como se" "es posible" "se puede" "how to" "?"; then
+            LABEL=question
+          else
+            LABEL=triage
+          fi
+
+          if [[ "$LABEL" == "triage" ]]; then
+            # Crear el label la primera vez que se necesita (si ya existe, ignorar).
+            gh label create triage \
+              --description "Requiere clasificación manual" \
+              --color fbca04 2>/dev/null || true
+          fi
+
+          if gh issue edit "$ISSUE_NUMBER" --add-label "$LABEL"; then
+            printf '%s\n' "$LABEL" > /tmp/labels.txt
+          else
+            echo "::warning::No se pudo aplicar el label '$LABEL'"
+            printf '(ninguno)\n' > /tmp/labels.txt
+          fi
+
+      - name: Instalar OpenCode CLI
+        run: npm install --global @opencode/cli@latest
+
+      # Resumen con IA. El agente "plan" es de solo lectura (no puede editar
+      # el repo). Si este paso falla, el triage continúa con texto de respaldo.
+      - name: Generar resumen con OpenCode
+        timeout-minutes: 5
+        continue-on-error: true
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          TITLE=$(jq -r '.issue.title' "$GITHUB_EVENT_PATH")
+          BODY=$(jq -r '.issue.body // ""' "$GITHUB_EVENT_PATH")
+
+          # El prompt se arma por archivo para no interpolar el contenido
+          # del issue en el shell.
+          printf '%s\n' \
+            'Eres el bot de triage de issues del repositorio "Asteroids": un clon del' \
+            'clásico arcade en HTML5 Canvas puro, sin dependencias ni bundler. Toda la' \
+            'lógica del juego vive en un único archivo game.js (entidades con' \
+            'update(dt)/draw(), mundo toroidal de 800×600, power-ups y skins de nave),' \
+            'cargado por index.html. El README y los comentarios del proyecto están en' \
+            'español.' \
+            '' \
+            'Tu tarea: analizar el issue y el código del repositorio para redactar un' \
+            'informe de triage.' \
+            > /tmp/prompt.txt
+          printf '\nISSUE A ANALIZAR\n\nTítulo: %s\n\nCuerpo del issue:\n%s\n' \
+            "$TITLE" "$BODY" >> /tmp/prompt.txt
+          printf '%s\n' \
+            '' \
+            'Responde ÚNICAMENTE con un fragmento de Markdown en español (sin texto antes' \
+            'ni después, sin bloque de código que lo envuelva) que contenga exactamente' \
+            'estas cuatro secciones:' \
+            '' \
+            '### Resumen' \
+            'De 2 a 4 líneas, neutral y fiel a lo reportado.' \
+            '' \
+            '### Severidad estimada' \
+            '**baja**, **media**, **alta** o **crítica**, seguida de "—" y una frase de' \
+            'justificación.' \
+            '' \
+            '### Área del código' \
+            'Archivos y zonas concretas donde vive el problema o la propuesta (funciones,' \
+            'clases o secciones de game.js / index.html / README.md), según lo que' \
+            'realmente encuentres en el código. Si no puedes determinarlo, escribe "no' \
+            'determinada".' \
+            '' \
+            '### Pasos sugeridos' \
+            'Lista corta (2 a 5 pasos) para reproducir o verificar lo reportado, o para' \
+            'evaluar la propuesta si no es un bug.' \
+            '' \
+            'Reglas:' \
+            '- No inventes información que no esté en el issue ni en el código.' \
+            '- No modifiques ni crees archivos: tu trabajo es solo de análisis.' \
+            '- Si el issue está incompleto, indícalo en la sección correspondiente en' \
+            '  lugar de asumir datos.' \
+            >> /tmp/prompt.txt
+
+          opencode run --standalone \
+            --model opencode/glm-5.3-flash-free \
+            --agent plan \
+            "$(cat /tmp/prompt.txt)" > /tmp/resumen.md
+
+          # Quitar envoltorio de bloque de código si el modelo lo agregó,
+          # y espacios en blanco al inicio y al final.
+          if [[ "$(head -n1 /tmp/resumen.md)" == '```'* && "$(tail -n1 /tmp/resumen.md)" == '```'* ]]; then
+            sed -i '1d;$d' /tmp/resumen.md
+          fi
+          sed -i -e '/./,$!d' /tmp/resumen.md
+          RESUMEN=$(cat /tmp/resumen.md)
+          printf '%s\n' "$RESUMEN" > /tmp/resumen.md
+
+      - name: Actualizar el cuerpo del issue
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+
+          AUTHOR=$(jq -r '.issue.user.login // "?"' "$GITHUB_EVENT_PATH")
+          CREATED=$(jq -r '.issue.created_at // ""' "$GITHUB_EVENT_PATH")
+          BODY=$(jq -r '.issue.body // ""' "$GITHUB_EVENT_PATH")
+
+          # Texto original íntegro: si el cuerpo ya contiene una sección de
+          # triage (re-ejecución del run), se corta justo antes del marcador.
+          ORIGINAL=$(printf '%s\n' "$BODY" | awk '/<!-- opencode-triage -->/{exit} {print}')
+
+          LABEL=$(cat /tmp/labels.txt 2>/dev/null || printf '(ninguno)')
+
+          if [[ -s /tmp/resumen.md ]]; then
+            RESUMEN=$(cat /tmp/resumen.md)
+          else
+            RESUMEN=$(printf '### Resumen\n\nNo disponible: la generación automática falló en esta ejecución. Para pedir un análisis manual, comenta `/oc` en este issue (p. ej. `/oc explain this issue`).')
+          fi
+
+          SHA_CORTO=${ISSUE_SHA:0:7}
+          URL_BASE="https://github.com/$ISSUE_REPO/blob/$ISSUE_SHA"
+          FECHA=${CREATED%Z}
+          FECHA=${FECHA/T/ }
+
+          {
+            if [[ -n "$ORIGINAL" ]]; then
+              printf '%s\n\n' "$ORIGINAL"
+            fi
+            printf '%s\n\n' '<!-- opencode-triage -->'
+            printf '%s\n\n' '---'
+            printf '%s\n\n' '## 🤖 Triage automático'
+            printf '%s\n\n' '> Sección generada automáticamente al crear el issue. El reporte original de arriba quedó intacto; si este run se re-ejecuta, esta sección se reemplaza sin duplicarse.'
+            printf '%s\n' '| Campo | Valor |'
+            printf '%s\n' '| --- | --- |'
+            printf '| **Labels** | %s |\n' "$LABEL"
+            printf '| **Reporte** | @%s · %s UTC |\n' "$AUTHOR" "$FECHA"
+            printf '| **Commit vigente** | [`%s`](https://github.com/%s/tree/%s) |\n' "$SHA_CORTO" "$ISSUE_REPO" "$ISSUE_SHA"
+            printf '| **Archivos clave** | [game.js](%s/game.js) · [index.html](%s/index.html) · [README.md](%s/README.md) |\n\n' "$URL_BASE" "$URL_BASE" "$URL_BASE"
+            printf '%s\n' "$RESUMEN"
+          } > /tmp/body-final.md
+
+          gh issue edit "$ISSUE_NUMBER" --body-file /tmp/body-final.md
