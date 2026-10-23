@@ -45,7 +45,8 @@ Luego visita `http://localhost:3000`.
 - 3 vidas con invencibilidad temporal al reaparecer (parpadeo)
 - Asteroides se parten en fragmentos más pequeños al ser destruidos
 - Partículas de explosión al destruir asteroides
-- **Skins de la nave**: 4 diseños con silueta y color propios (Clásica, Bólido, Tóxica, Fotón). Presiona `S` para ciclar entre ellas, incluso a mitad de partida; el nombre se muestra brevemente en el HUD. La skin elegida se recuerda entre sesiones. Los iconos de vidas usan la misma silueta.
+- **Skins de la nave**: 5 diseños con silueta y color propios (Clásica, Bólido, Tóxica, Fotón, Grande). Presiona `S` para ciclar entre ellas, incluso a mitad de partida; el nombre se muestra brevemente en el HUD. La skin elegida se recuerda entre sesiones. Los iconos de vidas usan la misma silueta.
+- **Skin Grande**: nave morada al doble de tamaño que la nave original. Como recompensa por su mayor riesgo (ofrece un blanco más grande), cada asteroide destruido otorga el doble de puntos (p. ej. 200 por asteroide pequeño). El tamaño de la nave, el morro de disparo y el escudo se adaptan automáticamente al cambiar de skin.
 - **Estrella fugaz**: cada 8–15 segundos entra por un borde de la pantalla un asteroide especial dorado con estela. Es mucho más rápida que los asteroides normales (220–320 px/s), no se parte en fragmentos y se desvanece sola a los 6 segundos (parpadea en su último segundo). Derribarla da 250 puntos; chocar contra ella destruye la nave. Solo hay una en pantalla a la vez.
 - **Escudo**: la barrera circular cian absorbe hasta 3 impactos de asteroide durante 8 segundos (ver Power-ups).
 
